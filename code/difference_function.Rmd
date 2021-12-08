@@ -1,0 +1,152 @@
+---
+title: "Difference Function for NDVI and 2015 FAM"
+author: "Elmera Azadpour"
+date: "11/9/2021"
+output: html_document
+---
+
+## raster to tif before we can do difference function
+```{r}
+library(sf)
+library(fasterize)
+library(raster)
+library(tidyverse)
+library(rgdal)
+
+# read in (or create) raster with resolution, extent, crs, etc. that you want
+template <- raster("Annual2015_geotiff_13Oct20151.tif") # filepath to template raster
+
+
+# read in polygon and make sure its in same projection
+polygon_fallow <- st_read(dsn = "maxNDVIJun_kern2015_fallow", # folder shapefile is in
+                   layer = "polygons_kern_maxNDVIJun_Fallow") %>%  # name of files - i.e., I have 'AltoMayo.dbf', 'AltoMayo.shp', etc.
+  st_transform(crs = crs(template)) # make sure its in the same projection as the template
+
+# convert to raster with fasterize
+raster_fallow <- fasterize(
+  sf = polygon_fallow,
+  raster = template
+)
+
+# save raster as .tif
+#writeRaster(x = raster_fallow, filename = "polygons_kern_maxNDVIJun_Fallow.tif")
+
+
+
+## Same idea but for ag shp
+# read in polygon and make sure its in same projection
+polygon_ag <- st_read(dsn = "maxNDVIJun_kern2015_ag", # folder shapefile is in
+                   layer = "polygons_kern_maxNDVIJun_Agriculture") %>%  
+  st_transform(crs = crs(template)) # make sure its in the same projection as the template
+
+# convert to raster with fasterize
+raster_ag <- fasterize(
+  sf = polygon_ag,
+  raster = template
+)
+
+writeRaster(x = raster_ag, filename = "polygons_kern_maxNDVIJun_Agriculture.tif")
+
+
+## apply a subtract function 
+Annual2015 <- raster("Annual2015_, 90-geotiff_13Oct20151.tif")
+Kern_maxNDVIJun_Ag <- raster("polygons_kern_maxNDVIJun_Agriculture.tif")
+Kern_maxNDVIJun_Fallow <- raster("polygons_kern_maxNDVIJun_Fallow.tif")
+
+## apply a difference between annual 2016 and new ndvi ag classifcation 
+outputRaster <- overlay(Annual2015, Kern_maxNDVIJun_Ag, fun=diff)
+outputRaster_fallow <- overlay(Annual2015, Kern_maxNDVIJun_Fallow, fun=diff)
+# writeRaster(x = outputRaster, filename = "diff_annual2015_kernmaxNDVIjun.tif") # doesn't work 
+# writeRaster(x = outputRaster_fallow, filename = "diff_annual2015_kernmaxNDVIjun_fallow.tif") # doesn't work 
+```
+
+
+## Patrick's code help for doing the difference function
+```{r}
+# For Fam data 1 = Fallow; 2 = Ag
+library(raster)
+
+ ### need to designate this somewhere so you can find the temp files raster will write
+rasterOptions(tmpdir="~/Desktop/ArnholdFellow-Su21/Histogram_StartDates/kern_histogram/kern_histogram/temp_tif")
+
+fam <- raster("~/Desktop/ArnholdFellow-Su21/Histogram_StartDates/kern_histogram/kern_histogram/difference/Annual2015_geotiff_13Oct20151_INT2U.tif")
+fallow <- raster("~/Desktop/ArnholdFellow-Su21/Histogram_StartDates/kern_histogram/kern_histogram/difference/polygons_kern_maxNDVIJun_Fallow.tif")
+ag <- raster("~/Desktop/ArnholdFellow-Su21/Histogram_StartDates/kern_histogram/kern_histogram/difference/polygons_kern_maxNDVIJun_Agriculture.tif")
+
+### remove the '1' (Ag) category from FAM
+fam[fam==2]<-0
+
+### convert fallow in FAM to values of 2
+fam[fam==1]<-2 
+
+### make a stack of the two rasters
+s <- stack(fam,fallow)
+
+
+### sum them (need the na.rm=TRUE argument to ignore NA values)
+s_sum <- calc(s, sum, na.rm=TRUE)
+
+### limit all this to areas you actually analyzed so can make a mask that combines your ag + fallow:
+mask_stack <- stack(ag,fallow)
+mask <- calc(mask_stack,sum,na.rm=TRUE)
+mask[mask==0]<- NA
+
+### will limit values to your analytical domain
+s_sum_mask <- mask(s_sum, mask)
+# writeRaster(x = s_sum_mask, filename = "diff_FAM_kernmaxNDVIjun_2015.tif") # export this
+# plot(s_sum_mask)
+
+## tabulate the values for each category for performance statistics
+freq(s_sum_mask) 
+```
+
+
+```{r}
+maxmean <- raster("~/Desktop/ArnholdFellow-Su21/Histogram_StartDates/kern_histogram/kern_histogram/difference/polygons_kern_maxmeanNDVIJun_2015.tif")
+plot(maxmean)
+```
+
+### New approach to difference function, excluding geo column and looking at classifcation and system index features only 
+## read in packages
+```{r}
+library(tidyverse)
+library(here)
+library(janitor)
+```
+
+## read in excel sheet with FAM ag and fallowed classifcation and then our NDVI classification
+```{r}
+FAM_fc_kern <- read_csv(here("data", "FAM_fc_Kern.csv")) %>% 
+  clean_names() %>% 
+  rename(classification = median) %>% 
+  select(system_index, pmt_site, classification)
+
+landsat8_ndvi_kern2015<- read_csv(here("data", "landsat8_ndvi_series_kern.csv")) %>% 
+  clean_names() %>% 
+  select(system_index, matching_kern_polygon_id, pmt_site, max_ndvi, classification) %>% 
+  mutate(
+ classification = case_when(
+     classification== 0 ~ 2, ## convert 0 to 2 to match fallow classifcation binary across both classific.
+    TRUE ~ classification
+ ))
+```
+
+## merge dataframes by "pmt_site"
+```{r}
+## merge FAM and our classification
+merged_df <- right_join(FAM_fc_kern, landsat8_ndvi_kern2015, by = "pmt_site")
+
+## count matching/not
+merged_df_matching <- merged_df %>% mutate(matching = 
+                                             ifelse(classification.x==classification.y,"Yes","No"))
+
+## now filter the non matching 
+merged_df_nonmatching <- merged_df_matching %>% 
+  filter(matching == "No") 
+
+## now filter the matching 
+merged_df_matchingonly <- merged_df_matching %>% 
+  filter(matching == "Yes") 
+
+```
+

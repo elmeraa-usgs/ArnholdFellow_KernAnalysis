@@ -1,0 +1,85 @@
+---
+title: "Dissolving polygons"
+author: "Elmera Azadpour"
+date: "9/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(janitor)
+library(sf)
+library(stringr)
+library(rgeos)
+library(raster)
+```
+
+```{r}
+# Note: Comm_code = 66000 is  fields that were cultivated then fallowed, but only available for 2017-2019
+kern_2011 <- read_sf(here("kern2011"), layer = "kern2011") %>% 
+  clean_names() %>% 
+  select(dt_act,dt_inact)
+
+kern_2014 <- read_sf(here("kern2014"), layer = "kern2014") %>% 
+  clean_names()
+
+kern_2015 <- read_sf(here("kern2015"), layer = "kern2015") %>% 
+  clean_names() %>% 
+  select(dt_act,dt_inact)
+
+kern_2016 <- read_sf(here("kern2016"), layer = "kern2016") %>% 
+  clean_names() 
+
+kern_2017 <- read_sf(here("kern2017"), layer = "kern2017") %>% 
+  clean_names() 
+
+kern_2018 <- read_sf(here("kern2018"), layer = "kern2018") %>% 
+  clean_names() 
+
+kern_2019 <- read_sf(here("kern2019"), layer = "kern2019") %>% 
+  clean_names() 
+```
+
+
+## Read in Families csv to aggregate by "agroclass"
+```{r}
+famililes <- read.csv(here("Families_Abandonment.csv"))
+```
+
+
+## Apply a string function so that if, for example, comm = almond, agroclass = nuts
+```{r}
+# Merge on Comm 
+merge_kern_2017 <- merge(kern_2017, famililes, by=c("comm"), 
+                  all=TRUE) %>% 
+  select(comm,dt_act,dt_inact,permit,permittee,species,agroclass)
+
+merge_kern_2018 <- merge(kern_2018, famililes, by=c("comm"), 
+                  all=TRUE) %>% 
+  select(comm,dt_act,dt_inact,permit,permittee,species,agroclass)
+
+merge_kern_2019 <- merge(kern_2019, famililes, by=c("comm"), 
+                  all=TRUE) %>% 
+  select(comm,dt_act,dt_inact,permit,permittee,species,agroclass)
+
+## make sure they all have the same crs 
+merge_kern_2017 <- st_transform(merge_kern_2017, st_crs(kern_2016))
+merge_kern_2018 <- st_transform(merge_kern_2018, st_crs(kern_2016))
+merge_kern_2019 <- st_transform(merge_kern_2019, st_crs(kern_2016))
+ 
+```
+
+```{r}
+dissolve2017kern = aggregate(merge_kern_2017, by = list(merge_kern_2017$agroclass), FUN = sum, dissolve = TRUE)
+
+dissolve2017kern = aggregate(merge_kern_2017)
+plot(dissolve2017kern)
+
+install.packages("gpclib")
+library(gpclib)
+
+dissolve2017kern <- unionSpatialPolygons(merge_kern_2017, merge_kern_2017$agroclass)
+```
+
